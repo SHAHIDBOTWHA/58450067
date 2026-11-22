@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اتصال ربات واتساپ</title>
+    <style>
+        body {
+            font-family: Tahoma, sans-serif;
+            background: #f1f5f9;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .box {
+            background: #fff;
+            width: 100%;
+            max-width: 380px;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+            text-align: center;
+        }
+        .url {
+            font-size: 12px;
+            color: #475569;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 8px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            word-break: break-all;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 12px 0;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            font-size: 16px;
+            direction: ltr;
+            text-align: left;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            background: #2563eb;
+            color: #fff;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: #93c5fd;
+            cursor: not-allowed;
+        }
+        .code {
+            display: none;
+            margin-top: 16px;
+            padding: 14px;
+            border-radius: 10px;
+            background: #ecfdf5;
+            border: 1px solid #10b981;
+            color: #065f46;
+            font-size: 22px;
+            font-weight: bold;
+            letter-spacing: 3px;
+            direction: ltr;
+        }
+        .copy {
+            display: none;
+            margin-top: 10px;
+            background: #0f172a;
+        }
+    </style>
+</head>
+<body>
+<div class="box">
+    <h2>ربات واتساپ</h2>
+    <div class="url">https://Bot-production-dde3ea49.up.railway.app</div>
+    <p>شماره را با کد کشور وارد کنید (مثال: 93747507719)</p>
+    <input id="phone" type="text" placeholder="93747507719">
+    <button id="sendBtn" onclick="sendPair()">دریافت کد اتصال</button>
+    <div id="codeBox" class="code"></div>
+    <button id="copyBtn" class="copy" onclick="copyPair()">کپی کد</button>
+</div>
+
+<script>
+const BASE_URL = 'https://Bot-production-dde3ea49.up.railway.app';
+let timer = null;
+
+function startWait(sec = 28) {
+    const btn = document.getElementById('sendBtn');
+    clearInterval(timer);
+    let left = sec;
+    btn.disabled = true;
+    btn.innerText = `Wait ${left}s`;
+
+    timer = setInterval(() => {
+        left--;
+        if (left <= 0) {
+            clearInterval(timer);
+            btn.disabled = false;
+            btn.innerText = 'دریافت کد اتصال';
+        } else {
+            btn.innerText = `Wait ${left}s`;
+        }
+    }, 1000);
+}
+
+async function sendPair() {
+    const number = document.getElementById('phone').value.trim();
+    const codeBox = document.getElementById('codeBox');
+    const copyBtn = document.getElementById('copyBtn');
+
+    if (!number) {
+        alert('لطفاً شماره را وارد کنید.');
+        return;
+    }
+
+    codeBox.style.display = 'none';
+    copyBtn.style.display = 'none';
+    startWait(28);
+
+    try {
+        const res = await fetch(`${BASE_URL}/pair`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ number })
+        });
+        const data = await res.json();
+
+        if (data.code) {
+            codeBox.innerText = data.code;
+            codeBox.style.display = 'block';
+            copyBtn.style.display = 'block';
+        } else {
+            alert(data.error || data.message || 'خطایی رخ داد.');
+        }
+    } catch {
+        alert('ارتباط با سرور برقرار نشد.');
+    }
+}
+
+function copyPair() {
+    const text = document.getElementById('codeBox').innerText;
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    alert('کپی شد: ' + text);
+}
+</script>
+</body>
+</html>
