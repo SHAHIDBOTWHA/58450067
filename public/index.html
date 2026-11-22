@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>اتصال ربات واتساپ</title>
+    <title>اتصال ربات واتساپ - SHAHID74</title>
     <style>
         body {
             font-family: Tahoma, sans-serif;
@@ -24,6 +24,16 @@
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
             text-align: center;
+        }
+        .tag-badge {
+            display: inline-block;
+            background: #dbeafe;
+            color: #1d4ed8;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 4px 12px;
+            border-radius: 999px;
+            margin-bottom: 10px;
         }
         .url {
             font-size: 12px;
@@ -74,22 +84,36 @@
             letter-spacing: 3px;
             direction: ltr;
         }
+        .sub-note {
+            display: none;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #334155;
+        }
         .copy {
             display: none;
             margin-top: 10px;
             background: #0f172a;
         }
+        .footer {
+            margin-top: 16px;
+            font-size: 12px;
+            color: #64748b;
+        }
     </style>
 </head>
 <body>
 <div class="box">
+    <div class="tag-badge">SHAHID74</div>
     <h2>ربات واتساپ</h2>
     <div class="url">https://58450067-production.up.railway.app</div>
     <p>شماره را با کد کشور وارد کنید (مثال: 93747507719)</p>
     <input id="phone" type="text" placeholder="93747507719">
     <button id="sendBtn" onclick="sendPair()">دریافت کد اتصال</button>
     <div id="codeBox" class="code"></div>
+    <div id="subNote" class="sub-note">شناسه: SHAHID74 — پس از اتصال در واتساپ .MENU بزنید</div>
     <button id="copyBtn" class="copy" onclick="copyPair()">کپی کد</button>
+    <div class="footer">این ربات توسط KING SHAHID جور شده است.</div>
 </div>
 
 <script>
@@ -118,6 +142,7 @@ function startWait(sec = 28) {
 async function sendPair() {
     const number = document.getElementById('phone').value.trim();
     const codeBox = document.getElementById('codeBox');
+    const subNote = document.getElementById('subNote');
     const copyBtn = document.getElementById('copyBtn');
 
     if (!number) {
@@ -126,6 +151,7 @@ async function sendPair() {
     }
 
     codeBox.style.display = 'none';
+    subNote.style.display = 'none';
     copyBtn.style.display = 'none';
     startWait(28);
 
@@ -140,6 +166,7 @@ async function sendPair() {
         if (data.code) {
             codeBox.innerText = data.code;
             codeBox.style.display = 'block';
+            subNote.style.display = 'block';
             copyBtn.style.display = 'block';
         } else {
             alert(data.error || data.message || 'خطایی رخ داد.');
