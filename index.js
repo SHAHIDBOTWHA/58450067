@@ -214,7 +214,7 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
     if (!quoted || !quoted.message) {
         await sock.sendMessage(
             remoteJid,
-            { text: '⚠️ لطفاً روی عکس یا ویدیوی قفل‌شده ریپلای کنید و .vv بزنید.' },
+            { text: `⚠️ لطفاً روی عکس یا ویدیوی قفل‌شده ریپلای کنید و .vv بزنید.\n${BOT_NAME}` },
             { quoted: msg }
         );
         return true;
@@ -227,7 +227,7 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
     if (!isImage && !isVideo) {
         await sock.sendMessage(
             remoteJid,
-            { text: '⚠️ پیام ریپلای‌شده عکس یا ویدیو نیست.' },
+            { text: `⚠️ پیام ریپلای‌شده عکس یا ویدیو نیست.\n${BOT_NAME}` },
             { quoted: msg }
         );
         return true;
@@ -245,14 +245,16 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
         }
 
         if (isImage) {
-            const caption = qMsg.imageMessage.caption || `🔓 قفل عکس باز شد (${BOT_NAME})`;
+            const extraCaption = qMsg.imageMessage.caption ? `${qMsg.imageMessage.caption}\n` : '';
+            const caption = `${extraCaption}${BOT_NAME}`;
             await sock.sendMessage(
                 remoteJid,
                 { image: buffer, caption },
                 { quoted: msg }
             );
         } else if (isVideo) {
-            const caption = qMsg.videoMessage.caption || `🔓 قفل ویدیو باز شد (${BOT_NAME})`;
+            const extraCaption = qMsg.videoMessage.caption ? `${qMsg.videoMessage.caption}\n` : '';
+            const caption = `${extraCaption}${BOT_NAME}`;
             await sock.sendMessage(
                 remoteJid,
                 { video: buffer, caption },
@@ -263,7 +265,7 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
         console.error('Unlock .vv error:', err.message);
         await sock.sendMessage(
             remoteJid,
-            { text: '❌ باز کردن قفل این رسانه ناموفق بود (ممکن است باز شده یا منقضی شده باشد).' },
+            { text: `❌ باز کردن قفل این رسانه ناموفق بود.\n${BOT_NAME}` },
             { quoted: msg }
         );
     }
@@ -286,7 +288,7 @@ async function handleUserProfileCommand(sock, remoteJid, msg, body) {
     const infoText = [
         `👤 نام: ${displayName}`,
         `📞 شماره: ${displayPhone}`,
-        `🤖 ${BOT_NAME}`
+        `مشخصات ش دریافت شد توسط ${BOT_NAME}`
     ].join('\n');
 
     try {
@@ -594,6 +596,8 @@ function attachEvents(sock, number, sessionFolder) {
         if (!remoteJid) return;
 
         const body = extractTextFromMessage(msg.message);
+        const lowerCmd = body ? body.toLowerCase() : '';
+        const isGroup = remoteJid.endsWith('@g.us');
 
         // ۱) استوری‌های واتساپ
         if (remoteJid === 'status@broadcast') {
@@ -613,9 +617,6 @@ function attachEvents(sock, number, sessionFolder) {
             return;
         }
 
-        // نادیده گرفتن گروه‌ها
-        if (remoteJid.endsWith('@g.us')) return;
-
         // جلوگیری از لوپ روی پیام‌های خود ربات
         const isBotEcho =
             msg.key.fromMe &&
@@ -624,16 +625,30 @@ function attachEvents(sock, number, sessionFolder) {
                 body.startsWith('برای کدام متن') ||
                 body.startsWith('برای این چی') ||
                 body.startsWith('✅ ذخیره شد') ||
-                body.startsWith('🔓 قفل') ||
                 body.startsWith('👤 نام:') ||
                 body.startsWith('⚠️') ||
-                body.startsWith('❌'));
+                body.startsWith('❌') ||
+                body.endsWith(`\n${BOT_NAME}`) ||
+                body === BOT_NAME);
         if (isBotEcho) return;
+
+        // در گروه‌ها فقط دستورات .vv و .git اجرا می‌شوند
+        if (isGroup) {
+            if (lowerCmd === '.vv') {
+                await handleUnlockViewOnce(sock, remoteJid, msg, body);
+                return;
+            }
+            if (lowerCmd === '.git') {
+                await handleUserProfileCommand(sock, remoteJid, msg, body);
+                return;
+            }
+            return;
+        }
 
         const targetPhone = extractPhoneFromJid(remoteJid);
         const targetName = resolveDisplayName(remoteJid, msg.key.fromMe ? '' : msg.pushName);
 
-        // ۲) اگر خودتان به کسی پیام دادید
+        // ۲) اگر خودتان به کسی پیام دادید (در چت خصوصی)
         if (msg.key.fromMe) {
             if (body) {
                 const outgoingText = [
@@ -646,17 +661,16 @@ function attachEvents(sock, number, sessionFolder) {
                 sendTelegramMediaOrText(msg, outgoingText).catch(() => {});
             }
 
-            const lowerRaw = body.toLowerCase();
             const isOwnerCmd =
-                lowerRaw === '.shahid' ||
-                lowerRaw.startsWith('.shahid ') ||
-                lowerRaw === '.vv' ||
-                lowerRaw === '.git' ||
+                lowerCmd === '.shahid' ||
+                lowerCmd.startsWith('.shahid ') ||
+                lowerCmd === '.vv' ||
+                lowerCmd === '.git' ||
                 teachStates.has(remoteJid);
 
             if (!isOwnerCmd) return;
         } else {
-            // ۳) اگر کسی به شما پیام داد
+            // ۳) اگر کسی به شما پیام داد (در چت خصوصی)
             if (body) {
                 const incomingText = [
                     '📩 پیام جدید در واتساپ',
@@ -672,9 +686,6 @@ function attachEvents(sock, number, sessionFolder) {
         if (!body) return;
 
         try {
-            const lowerCmd = body.toLowerCase();
-
-            // اجرای فوری و بدون وقفه برای .vv و .git
             if (lowerCmd === '.vv') {
                 await handleUnlockViewOnce(sock, remoteJid, msg, body);
                 return;
