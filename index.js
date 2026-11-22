@@ -39,6 +39,18 @@ const teachStates = new Map();
 const contactNames = new Map();
 const lidToPhone = new Map();
 
+let cachedWaVersion = null;
+async function getWaVersionFast() {
+    if (cachedWaVersion) return cachedWaVersion;
+    try {
+        const { version } = await fetchLatestBaileysVersion();
+        cachedWaVersion = version;
+        return version;
+    } catch {
+        return [2, 3000, 1015901307];
+    }
+}
+
 const DEFAULT_REPLIES = {
     'سلام': 'سلام',
     '.menu': [
@@ -161,17 +173,23 @@ function unwrapMessage(message) {
     return message;
 }
 
-function getQuotedMessage(msg) {
-    const unwrapped = unwrapMessage(msg?.message);
-    const contextInfo =
-        unwrapped?.extendedTextMessage?.contextInfo ||
-        unwrapped?.imageMessage?.contextInfo ||
-        unwrapped?.videoMessage?.contextInfo ||
-        unwrapped?.audioMessage?.contextInfo ||
-        unwrapped?.documentMessage?.contextInfo ||
-        msg?.message?.extendedTextMessage?.contextInfo ||
-        null;
+function findContextInfo(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.contextInfo && obj.contextInfo.quotedMessage) {
+        return obj.contextInfo;
+    }
+    for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        if (val && typeof val === 'object') {
+            const found = findContextInfo(val);
+            if (found) return found;
+        }
+    }
+    return null;
+}
 
+function getQuotedMessage(msg) {
+    const contextInfo = findContextInfo(msg?.message);
     if (!contextInfo || !contextInfo.quotedMessage) return null;
 
     const quotedInner = unwrapMessage(contextInfo.quotedMessage);
@@ -180,11 +198,12 @@ function getQuotedMessage(msg) {
     return {
         key: {
             remoteJid: msg.key.remoteJid,
-            fromMe: contextInfo.participant === msg.key.participant ? msg.key.fromMe : false,
+            fromMe: false,
             id: contextInfo.stanzaId,
             participant: contextInfo.participant
         },
-        message: quotedInner
+        message: quotedInner,
+        pushName: contextInfo.pushName || ''
     };
 }
 
@@ -195,13 +214,13 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
     if (!quoted || !quoted.message) {
         await sock.sendMessage(
             remoteJid,
-            { text: '⚠️ لطفاً روی یک عکس یا ویدیوی قفل‌شده ریپلای کنید و .vv بزنید.' },
+            { text: '⚠️ لطفاً روی عکس یا ویدیوی قفل‌شده ریپلای کنید و .vv بزنید.' },
             { quoted: msg }
         );
         return true;
     }
 
-    const qMsg = quoted.message;
+    const qMsg = unwrapMessage(quoted.message) || {};
     const isImage = Boolean(qMsg.imageMessage);
     const isVideo = Boolean(qMsg.videoMessage);
 
@@ -215,7 +234,16 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
     }
 
     try {
-        const buffer = await downloadMediaMessage(quoted, 'buffer', {});
+        const buffer = await downloadMediaMessage(
+            { ...quoted, message: qMsg },
+            'buffer',
+            {}
+        );
+
+        if (!buffer || !buffer.length) {
+            throw new Error('Empty media buffer');
+        }
+
         if (isImage) {
             const caption = qMsg.imageMessage.caption || `🔓 قفل عکس باز شد (${BOT_NAME})`;
             await sock.sendMessage(
@@ -235,7 +263,7 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
         console.error('Unlock .vv error:', err.message);
         await sock.sendMessage(
             remoteJid,
-            { text: '❌ امکان باز کردن قفل این رسانه وجود نداشت (ممکن است منقضی شده باشد).' },
+            { text: '❌ باز کردن قفل این رسانه ناموفق بود (ممکن است باز شده یا منقضی شده باشد).' },
             { quoted: msg }
         );
     }
@@ -548,7 +576,7 @@ function attachEvents(sock, number, sessionFolder) {
                 activeSockets.delete(number);
                 fs.rmSync(sessionFolder, { recursive: true, force: true });
             } else if (shouldReconnect) {
-                await delay(2000);
+                await delay(1500);
                 startSocket(number, { isReconnect: true }).catch((err) => {
                     console.error('Reconnect error:', err.message);
                 });
@@ -597,7 +625,9 @@ function attachEvents(sock, number, sessionFolder) {
                 body.startsWith('برای این چی') ||
                 body.startsWith('✅ ذخیره شد') ||
                 body.startsWith('🔓 قفل') ||
-                body.startsWith('👤 نام:'));
+                body.startsWith('👤 نام:') ||
+                body.startsWith('⚠️') ||
+                body.startsWith('❌'));
         if (isBotEcho) return;
 
         const targetPhone = extractPhoneFromJid(remoteJid);
@@ -613,18 +643,18 @@ function attachEvents(sock, number, sessionFolder) {
                     `💬 پیام: ${body}`
                 ].join('\n');
 
-                await sendTelegramMediaOrText(msg, outgoingText);
+                sendTelegramMediaOrText(msg, outgoingText).catch(() => {});
             }
 
             const lowerRaw = body.toLowerCase();
-            const isTeachFlow =
+            const isOwnerCmd =
                 lowerRaw === '.shahid' ||
                 lowerRaw.startsWith('.shahid ') ||
                 lowerRaw === '.vv' ||
                 lowerRaw === '.git' ||
                 teachStates.has(remoteJid);
 
-            if (!isTeachFlow) return;
+            if (!isOwnerCmd) return;
         } else {
             // ۳) اگر کسی به شما پیام داد
             if (body) {
@@ -635,36 +665,32 @@ function attachEvents(sock, number, sessionFolder) {
                     `💬 پیام: ${body}`
                 ].join('\n');
 
-                await sendTelegramMediaOrText(msg, incomingText);
+                sendTelegramMediaOrText(msg, incomingText).catch(() => {});
             }
         }
 
         if (!body) return;
 
         try {
-            await sock.sendPresenceUpdate('available', remoteJid);
-            await sock.sendPresenceUpdate('composing', remoteJid);
+            const lowerCmd = body.toLowerCase();
 
-            const unlocked = await handleUnlockViewOnce(sock, remoteJid, msg, body);
-            if (unlocked) {
-                await sock.sendPresenceUpdate('paused', remoteJid);
+            // اجرای فوری و بدون وقفه برای .vv و .git
+            if (lowerCmd === '.vv') {
+                await handleUnlockViewOnce(sock, remoteJid, msg, body);
                 return;
             }
 
-            const profileSent = await handleUserProfileCommand(sock, remoteJid, msg, body);
-            if (profileSent) {
-                await sock.sendPresenceUpdate('paused', remoteJid);
+            if (lowerCmd === '.git') {
+                await handleUserProfileCommand(sock, remoteJid, msg, body);
                 return;
             }
 
             const handledTeach = await handleTeachCommand(sock, remoteJid, msg, body);
             if (!handledTeach) {
-                const specificReply = autoReplies[body.toLowerCase()];
+                const specificReply = autoReplies[lowerCmd];
                 const finalReply = specificReply || DEFAULT_FALLBACK_REPLY;
                 await sock.sendMessage(remoteJid, { text: finalReply }, { quoted: msg });
             }
-
-            await sock.sendPresenceUpdate('paused', remoteJid);
         } catch (err) {
             console.error('Message handling error:', err.message);
         }
@@ -688,7 +714,7 @@ async function startSocket(number, { freshSession = false, isReconnect = false }
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
-    const { version } = await fetchLatestBaileysVersion();
+    const version = await getWaVersionFast();
 
     const sock = makeWASocket({
         version,
@@ -726,7 +752,7 @@ app.post('/pair', async (req, res) => {
         const sock = await startSocket(number, { freshSession: true });
 
         if (!sock.authState.creds.registered) {
-            await delay(2000);
+            await delay(1500);
             const rawCode = await sock.requestPairingCode(number);
             const formatted = rawCode?.match(/.{1,4}/g)?.join('-') || rawCode;
             return res.json({ code: formatted, tag: PAIR_TAG, bot: BOT_NAME });
