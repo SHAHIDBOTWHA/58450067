@@ -15,17 +15,17 @@ const SITE_URL = process.env.RAILWAY_STATIC_URL
     ? `https://${process.env.RAILWAY_STATIC_URL}`
     : 'https://58450067-production.up.railway.app';
 
-const publicDir = path.join(__dirname, 'public');
-const indexHtmlPath = path.join(publicDir, 'index.html');
+const publicFolder = path.join(__dirname, 'public');
+const indexFile = path.join(publicFolder, 'index.html');
 
 app.use(express.json());
-app.use(express.static(publicDir));
+app.use(express.static(publicFolder));
 
 app.get('/', (req, res) => {
-    if (fs.existsSync(indexHtmlPath)) {
-        return res.sendFile(indexHtmlPath);
+    if (fs.existsSync(indexFile)) {
+        return res.sendFile(indexFile);
     }
-    return res.status(200).send('Server is running, but public/index.html was not found.');
+    return res.status(404).send('public/index.html not found');
 });
 
 app.get('/status', (req, res) => {
@@ -44,10 +44,10 @@ app.post('/pair', async (req, res) => {
         return res.status(400).json({ error: 'شماره را همراه با کد کشور وارد کنید.' });
     }
 
-    const sessionPath = path.join(__dirname, 'sessions', number);
+    const sessionFolder = path.join(__dirname, 'sessions', number);
 
     try {
-        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
 
         const sock = makeWASocket({
             auth: {
