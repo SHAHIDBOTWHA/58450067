@@ -15,6 +15,7 @@ const SITE_URL = process.env.RAILWAY_STATIC_URL
     ? `https://${process.env.RAILWAY_STATIC_URL}`
     : 'https://58450067-production.up.railway.app';
 
+const PAIR_TAG = 'SHAHID74';
 const publicFolder = path.join(__dirname, 'public');
 const indexFile = path.join(publicFolder, 'index.html');
 
@@ -29,8 +30,24 @@ app.get('/', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-    res.json({ ok: true, site: SITE_URL });
+    res.json({ ok: true, site: SITE_URL, tag: PAIR_TAG });
 });
+
+function buildMenuText() {
+    return [
+        '╔══════════════════════╗',
+        '       📋 منوی ربات واتساپ',
+        '╚══════════════════════╝',
+        '',
+        'این ربات توسط KING SHAHID جور شده است.',
+        `شناسه: ${PAIR_TAG}`,
+        '',
+        '📌 دستورات قابل استفاده:',
+        '• .MENU — نمایش این منو',
+        '• .PING — بررسی وضعیت اتصال ربات',
+        '• سلام — پیام خوش‌آمدگویی'
+    ].join('\n');
+}
 
 app.post('/pair', async (req, res) => {
     let { number } = req.body;
@@ -63,24 +80,33 @@ app.post('/pair', async (req, res) => {
 
         sock.ev.on('connection.update', async ({ connection }) => {
             if (connection === 'open') {
-                console.log(`Connected: ${number}`);
+                console.log(`Connected: ${number} (${PAIR_TAG})`);
                 await sock.sendMessage(sock.user.id, {
-                    text: '✅ ربات شما با موفقیت متصل شد.'
+                    text: `✅ ربات (${PAIR_TAG}) با موفقیت به واتساپ متصل شد!\nبرای دیدن منو دستور .MENU را بفرستید.\n\nاین ربات توسط KING SHAHID جور شده است.`
                 });
             }
         });
 
         sock.ev.on('messages.upsert', async ({ messages }) => {
             const msg = messages[0];
-            if (!msg.message || msg.key.fromMe) return;
+            if (!msg || !msg.message || msg.key.fromMe) return;
 
-            const body =
+            const body = (
                 msg.message.conversation ||
                 msg.message.extendedTextMessage?.text ||
-                '';
+                ''
+            ).trim();
 
-            if (body === '.ping' || body === 'سلام') {
-                await sock.sendMessage(msg.key.remoteJid, { text: 'ربات فعال است!' });
+            if (body.toUpperCase() === '.MENU') {
+                await sock.sendMessage(msg.key.remoteJid, { text: buildMenuText() });
+            } else if (body.toUpperCase() === '.PING') {
+                await sock.sendMessage(msg.key.remoteJid, {
+                    text: `🟢 ربات فعال است (${PAIR_TAG})!\nاین ربات توسط KING SHAHID جور شده است.`
+                });
+            } else if (body === 'سلام') {
+                await sock.sendMessage(msg.key.remoteJid, {
+                    text: 'سلام! خوش آمدید. برای مشاهده منو .MENU را بفرستید.'
+                });
             }
         });
 
@@ -88,10 +114,16 @@ app.post('/pair', async (req, res) => {
             await delay(1500);
             const code = await sock.requestPairingCode(number);
             const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
-            return res.json({ code: formatted });
+            return res.json({
+                code: formatted,
+                tag: PAIR_TAG
+            });
         }
 
-        return res.json({ message: 'این شماره قبلاً متصل است.' });
+        return res.json({
+            message: 'این شماره قبلاً متصل است. در واتساپ .MENU را بفرستید.',
+            tag: PAIR_TAG
+        });
     } catch (err) {
         console.error(err);
         return res.status(500).json({ error: 'خطا در تولید کد. کمی بعد دوباره تلاش کنید.' });
