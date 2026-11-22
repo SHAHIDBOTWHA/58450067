@@ -53,6 +53,7 @@ const DEFAULT_REPLIES = {
         '• .Shahid — یاد دادن جواب جدید',
         '• .Shahid <متن> — انتخاب متن برای یادگیری جواب',
         '• .vv — باز کردن قفل عکس/ویدیوی ریپلای‌شده',
+        '• .git — نمایش عکس پروفایل، نام و شماره کاربر',
         '• .menu — نمایش منو'
     ].join('\n')
 };
@@ -239,6 +240,44 @@ async function handleUnlockViewOnce(sock, remoteJid, msg, body) {
         );
     }
 
+    return true;
+}
+
+async function handleUserProfileCommand(sock, remoteJid, msg, body) {
+    if (body.toLowerCase() !== '.git') return false;
+
+    const quoted = getQuotedMessage(msg);
+    const targetJid = quoted?.key?.participant || remoteJid;
+    const phoneDigits = normalizeDigits(targetJid);
+    const mappedPhone = phoneDigits && lidToPhone.has(phoneDigits) ? lidToPhone.get(phoneDigits) : null;
+    const profileJid = mappedPhone ? `${mappedPhone}@s.whatsapp.net` : targetJid;
+
+    const displayPhone = extractPhoneFromJid(targetJid);
+    const displayName = resolveDisplayName(targetJid, quoted?.pushName || msg.pushName);
+
+    const infoText = [
+        `👤 نام: ${displayName}`,
+        `📞 شماره: ${displayPhone}`,
+        `🤖 ${BOT_NAME}`
+    ].join('\n');
+
+    try {
+        const ppUrl = await sock.profilePictureUrl(profileJid, 'image');
+        if (ppUrl) {
+            await sock.sendMessage(
+                remoteJid,
+                { image: { url: ppUrl }, caption: infoText },
+                { quoted: msg }
+            );
+            return true;
+        }
+    } catch {}
+
+    await sock.sendMessage(
+        remoteJid,
+        { text: `${infoText}\n🖼️ عکس پروفایل در دسترس نیست.` },
+        { quoted: msg }
+    );
     return true;
 }
 
@@ -557,7 +596,8 @@ function attachEvents(sock, number, sessionFolder) {
                 body.startsWith('برای کدام متن') ||
                 body.startsWith('برای این چی') ||
                 body.startsWith('✅ ذخیره شد') ||
-                body.startsWith('🔓 قفل'));
+                body.startsWith('🔓 قفل') ||
+                body.startsWith('👤 نام:'));
         if (isBotEcho) return;
 
         const targetPhone = extractPhoneFromJid(remoteJid);
@@ -581,6 +621,7 @@ function attachEvents(sock, number, sessionFolder) {
                 lowerRaw === '.shahid' ||
                 lowerRaw.startsWith('.shahid ') ||
                 lowerRaw === '.vv' ||
+                lowerRaw === '.git' ||
                 teachStates.has(remoteJid);
 
             if (!isTeachFlow) return;
@@ -603,10 +644,15 @@ function attachEvents(sock, number, sessionFolder) {
         try {
             await sock.sendPresenceUpdate('available', remoteJid);
             await sock.sendPresenceUpdate('composing', remoteJid);
-            await delay(300);
 
             const unlocked = await handleUnlockViewOnce(sock, remoteJid, msg, body);
             if (unlocked) {
+                await sock.sendPresenceUpdate('paused', remoteJid);
+                return;
+            }
+
+            const profileSent = await handleUserProfileCommand(sock, remoteJid, msg, body);
+            if (profileSent) {
                 await sock.sendPresenceUpdate('paused', remoteJid);
                 return;
             }
