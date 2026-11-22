@@ -1,6 +1,7 @@
 const express = require('express');
 const pino = require('pino');
 const path = require('path');
+const fs = require('fs');
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -14,8 +15,18 @@ const SITE_URL = process.env.RAILWAY_STATIC_URL
     ? `https://${process.env.RAILWAY_STATIC_URL}`
     : 'https://58450067-production.up.railway.app';
 
+const publicDir = path.join(__dirname, 'public');
+const indexHtmlPath = path.join(publicDir, 'index.html');
+
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(publicDir));
+
+app.get('/', (req, res) => {
+    if (fs.existsSync(indexHtmlPath)) {
+        return res.sendFile(indexHtmlPath);
+    }
+    return res.status(200).send('Server is running, but public/index.html was not found.');
+});
 
 app.get('/status', (req, res) => {
     res.json({ ok: true, site: SITE_URL });
