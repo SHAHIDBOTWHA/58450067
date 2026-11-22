@@ -5,66 +5,327 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KING SHAHID — Pairing Portal</title>
     <style>
-        :root {
-            --bg-black: #090b0a;
-            --card-dark: #111614;
-            --panel-dark: #171e1b;
-            --border-dark: #26322c;
-            --green: #16a34a;
-            --green-bright: #22c55e;
-            --green-soft: rgba(34, 197, 94, 0.14);
-            --orange: #f97316;
-            --orange-bright: #fb923c;
-            --orange-soft: rgba(249, 115, 22, 0.15);
-            --text-main: #f4f7f5;
-            --text-muted: #9ca8a1;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
         body {
             margin: 0;
             min-height: 100vh;
             font-family: Tahoma, sans-serif;
-            background: radial-gradient(circle at top, rgba(249, 115, 22, 0.14), transparent 45%),
-                        radial-gradient(circle at bottom right, rgba(22, 163, 74, 0.16), transparent 45%),
-                        var(--bg-black);
-            color: var(--text-main);
+            background: radial-gradient(circle at top, rgba(249, 115, 22, 0.22), transparent 45%),
+                        radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.2), transparent 45%),
+                        #090b0a;
+            color: #f4f7f5;
             display: flex;
             flex-direction: column;
             align-items: center;
         }
-
         .topbar {
             width: 100%;
+            box-sizing: border-box;
             background: #0d110f;
-            border-bottom: 1px solid var(--border-dark);
-            padding: 12px 18px;
+            border-bottom: 1px solid #26322c;
+            padding: 12px 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
-
-        .brand-left {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .brand {
+            font-weight: bold;
+            color: #fb923c;
+            font-size: 16px;
         }
-
-        .mini-logo {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
-            background: linear-gradient(135deg, var(--orange), var(--green));
+        .badge {
+            background: rgba(34, 197, 94, 0.16);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.4);
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .wrap {
+            width: 100%;
+            max-width: 420px;
+            box-sizing: border-box;
+            padding: 20px 14px 36px;
+        }
+        .card {
+            background: #111614;
+            border: 1px solid #26322c;
+            border-radius: 20px;
+            padding: 22px 18px;
+            text-align: center;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+        }
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 12px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #f97316, #16a34a);
+            color: #090b0a;
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 26px;
             font-weight: bold;
-            color: #090b0a;
+        }
+        h1 {
+            margin: 0;
+            font-size: 24px;
+            color: #fb923c;
+        }
+        .sub {
+            margin: 6px 0 16px;
+            font-size: 13px;
+            color: #9ca8a1;
+        }
+        .srv-box {
+            background: #171e1b;
+            border: 1px solid #26322c;
+            border-radius: 14px;
+            padding: 12px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            text-align: right;
+        }
+        .srv-name {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .srv-meta {
+            margin-top: 4px;
+            font-size: 12px;
+        }
+        .active-txt {
+            color: #22c55e;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .limit-txt {
+            color: #fb923c;
+            font-weight: bold;
+        }
+        select {
+            background: #0b0e0d;
+            color: #f4f7f5;
+            border: 1px solid #f97316;
+            border-radius: 8px;
+            padding: 7px 9px;
+            font-size: 12px;
+        }
+        .guide {
+            background: rgba(34, 197, 94, 0.14);
+            border: 1px solid rgba(34, 197, 94, 0.35);
+            color: #dcfce7;
+            border-radius: 12px;
+            padding: 11px 12px;
+            font-size: 12px;
+            line-height: 1.7;
+            text-align: right;
+            margin-bottom: 16px;
+        }
+        .lbl {
+            text-align: left;
+            font-size: 13px;
+            font-weight: bold;
+            color: #fb923c;
+            margin-bottom: 6px;
+            direction: ltr;
+        }
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 13px;
+            border-radius: 12px;
+            border: 1px solid #314039;
+            background: #0b0e0d;
+            color: #f4f7f5;
             font-size: 16px;
+            direction: ltr;
+            text-align: left;
+        }
+        .hint {
+            text-align: left;
+            font-size: 11px;
+            color: #9ca8a1;
+            margin: 6px 0 14px;
+            direction: ltr;
+        }
+        .btn-gen {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 13px;
+            border: none;
+            border-radius: 12px;
+            background: linear-gradient(90deg, #f97316, #16a34a);
+            color: #090b0a;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .btn-gen:disabled {
+            opacity: 0.55;
+        }
+        .code-out {
+            margin-top: 14px;
+            padding: 15px;
+            border-radius: 12px;
+            background: #0b0e0d;
+            border: 1px dashed #f97316;
+            color: #22c55e;
+            font-size: 21px;
+            font-weight: bold;
+            letter-spacing: 3px;
+            direction: ltr;
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-copy {
+            display: none;
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 10px;
+            padding: 11px;
+            border-radius: 12px;
+            border: 1px solid #22c55e;
+            background: rgba(34, 197, 94, 0.16);
+            color: #22c55e;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .ft {
+            margin-top: 14px;
+            font-size: 12px;
+            color: #fb923c;
+            font-weight: bold;
+        }
+        .link-txt {
+            margin-top: 5px;
+            font-size: 11px;
+            color: #9ca8a1;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="brand">KING SHAHID</div>
+        <div class="badge">● ONLINE</div>
+    </div>
+
+    <div class="wrap">
+        <div class="card">
+            <div class="logo">⚡</div>
+            <h1>KING SHAHID</h1>
+            <div class="sub">Generate Your Pairing Code</div>
+
+            <div class="srv-box">
+                <div>
+                    <div class="srv-name" id="srvTitle">Server 01 — KING SHAHID</div>
+                    <div class="srv-meta">
+                        <span class="active-txt">● ACTIVE</span>
+                        <span class="limit-txt">LIMIT: 50</span>
+                    </div>
+                </div>
+                <select id="srvSelect" onchange="changeSrv()">
+                    <option value="Server 01 — KING SHAHID">Server 01</option>
+                    <option value="Server 02 — SHAHID74">Server 02</option>
+                </select>
+            </div>
+
+            <div class="guide">
+                سرور را انتخاب کنید، شماره واتساپ را با کد کشور وارد کنید و دکمه دریافت کد را بزنید. پس از اتصال، در واتساپ <b>.MENU</b> بفرستید.
+            </div>
+
+            <div class="lbl">WhatsApp Number</div>
+            <input id="phone" type="text" placeholder="93747507719">
+            <div class="hint">Include country code (e.g., 93 for Afghanistan, 92 for Pakistan)</div>
+
+            <button class="btn-gen" id="genBtn" onclick="getCode()">🔑 Generate Pair Code</button>
+
+            <div class="code-out" id="codeBox">Your pairing code will appear here</div>
+            <button class="btn-copy" id="copyBtn" onclick="copyCode()">📋 Copy Code</button>
+
+            <div class="ft">این ربات توسط KING SHAHID جور شده است.</div>
+            <div class="link-txt">https://58450067-production.up.railway.app</div>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = 'https://58450067-production.up.railway.app';
+        let timer = null;
+
+        function changeSrv() {
+            document.getElementById('srvTitle').innerText = document.getElementById('srvSelect').value;
         }
 
-        .brand-title {
-            font-weight: bold;
+        function startWait(sec = 28) {
+            const btn = document.getElementById('genBtn');
+            clearInterval(timer);
+            let left = sec;
+            btn.disabled = true;
+            btn.innerText = '⏳ Wait ' + left + 's';
+            timer = setInterval(() => {
+                left--;
+                if (left <= 0) {
+                    clearInterval(timer);
+                    btn.disabled = false;
+                    btn.innerText = '🔑 Generate Pair Code';
+                } else {
+                    btn.innerText = '⏳ Wait ' + left + 's';
+                }
+            }, 1000);
+        }
+
+        async function getCode() {
+            const number = document.getElementById('phone').value.trim();
+            const codeBox = document.getElementById('codeBox');
+            const copyBtn = document.getElementById('copyBtn');
+
+            if (!number) {
+                alert('لطفاً شماره واتساپ را وارد کنید.');
+                return;
+            }
+
+            copyBtn.style.display = 'none';
+            codeBox.style.color = '#fb923c';
+            codeBox.innerText = 'Generating...';
+            startWait(28);
+
+            try {
+                const res = await fetch(BASE_URL + '/pair', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number })
+                });
+                const data = await res.json();
+
+                if (data.code) {
+                    codeBox.style.color = '#22c55e';
+                    codeBox.innerText = data.code;
+                    copyBtn.style.display = 'block';
+                } else {
+                    codeBox.style.color = '#fb923c';
+                    codeBox.innerText = 'Failed';
+                    alert(data.error || data.message || 'خطا در تولید کد.');
+                }
+            } catch {
+                codeBox.style.color = '#fb923c';
+                codeBox.innerText = 'Error';
+                alert('ارتباط با سرور برقرار نشد.');
+            }
+        }
+
+        function copyCode() {
+            const txt = document.getElementById('codeBox').innerText;
+            if (!txt || ['Generating...', 'Failed', 'Error', 'Your pairing code will appear here'].includes(txt)) return;
+            navigator.clipboard.writeText(txt);
+            alert('کپی شد: ' + txt);
+        }
+    </script>
+</body>
+</html>
