@@ -12,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_URL = process.env.RAILWAY_STATIC_URL
     ? `https://${process.env.RAILWAY_STATIC_URL}`
-    : 'https://Bot-production-dde3ea49.up.railway.app';
+    : 'https://58450067-production.up.railway.app';
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
