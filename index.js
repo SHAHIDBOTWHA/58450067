@@ -57,13 +57,13 @@ const DEFAULT_REPLIES = {
         `این ربات توسط ${BOT_NAME} جور شده است.`,
         `شناسه: ${PAIR_TAG}`,
         '',
-        '📌 دستورات:',
-        '• .Shahid — یاد دادن جواب جدید',
-        '• .Shahid <متن> — انتخاب متن برای یادگیری جواب',
-        '• .vv — باز کردن قفل عکس/ویدیوی ریپلای‌شده',
-        '• .git — نمایش عکس پروفایل، نام و شماره کاربر',
-        '• .hc — نمایش نام، پروفایل، تعداد و لیست نام و شماره اعضای گروه',
-        '• .menu — نمایش منو'
+        '📌 دستورات و کارکرد هر کدام:',
+        '• .Shahid — این دستور برای یاد دادن جواب جدید به ربات است.',
+        '• .Shahid <متن> — این دستور متن موردنظر را برای یادگیری جواب انتخاب می‌کند.',
+        '• .vv — این دستور قفل عکس یا ویدیوی ریپلای‌شده را باز می‌کند.',
+        '• .git — این دستور عکس پروفایل، نام و شماره کاربر را نشان می‌دهد.',
+        '• .hc — این دستور نام گروه، پروفایل، تعداد و لیست نام و شماره کاربران گروه را نشان می‌دهد.',
+        '• .menu — این دستور منوی دستورات و توضیح کار هر دستور را نشان می‌دهد.'
     ].join('\n')
 };
 
@@ -97,34 +97,55 @@ function normalizeDigits(val = '') {
 function registerContactMapping(entry) {
     if (!entry) return;
 
-    const id = entry.id || entry.key?.remoteJid || entry.key?.participant || entry.participant || '';
-    const alt = entry.lid || entry.key?.remoteJidAlt || entry.key?.participantAlt || entry.alt || '';
-    const pn = entry.pn || entry.phoneNumber || '';
+    const candidates = [
+        entry.id,
+        entry.jid,
+        entry.lid,
+        entry.pn,
+        entry.phoneNumber,
+        entry.key?.remoteJid,
+        entry.key?.participant,
+        entry.key?.remoteJidAlt,
+        entry.key?.participantAlt,
+        entry.participant,
+        entry.alt
+    ].filter(Boolean);
 
-    const idDigits = normalizeDigits(id);
-    const altDigits = normalizeDigits(alt);
-    const pnDigits = normalizeDigits(pn);
+    let phoneDigits = '';
+    let lidDigits = '';
 
-    if (id.endsWith('@s.whatsapp.net') && idDigits && altDigits) {
-        lidToPhone.set(altDigits, idDigits);
+    for (const c of candidates) {
+        const str = String(c);
+        const digits = normalizeDigits(str);
+        if (!digits) continue;
+
+        if (str.endsWith('@s.whatsapp.net')) {
+            phoneDigits = digits;
+        } else if (str.endsWith('@lid')) {
+            lidDigits = digits;
+        }
     }
-    if (alt.endsWith('@s.whatsapp.net') && altDigits && idDigits) {
-        lidToPhone.set(idDigits, altDigits);
-    }
-    if (pnDigits && altDigits) {
-        lidToPhone.set(altDigits, pnDigits);
-    }
-    if (pnDigits && idDigits && id.endsWith('@lid')) {
-        lidToPhone.set(idDigits, pnDigits);
+
+    const explicitPn = normalizeDigits(entry.pn || entry.phoneNumber || '');
+    const explicitLid = normalizeDigits(entry.lid || '');
+    if (explicitPn) phoneDigits = explicitPn;
+    if (explicitLid) lidDigits = explicitLid;
+
+    if (phoneDigits && lidDigits) {
+        lidToPhone.set(lidDigits, phoneDigits);
+        lidToPhone.set(phoneDigits, phoneDigits);
+    } else if (phoneDigits) {
+        lidToPhone.set(phoneDigits, phoneDigits);
     }
 }
 
 function extractPhoneFromJid(jid = '') {
     if (!jid) return 'نامشخص';
-    const digits = normalizeDigits(jid);
+    const str = String(jid);
+    const digits = normalizeDigits(str);
     if (!digits) return 'نامشخص';
 
-    if (jid.endsWith('@s.whatsapp.net')) {
+    if (str.endsWith('@s.whatsapp.net')) {
         return digits;
     }
 
@@ -132,7 +153,7 @@ function extractPhoneFromJid(jid = '') {
         return lidToPhone.get(digits);
     }
 
-    if (jid.endsWith('@lid')) {
+    if (str.endsWith('@lid')) {
         return `${digits} (LID)`;
     }
 
@@ -321,6 +342,42 @@ async function handleUserProfileCommand(sock, remoteJid, msg, body) {
     return true;
 }
 
+async function resolveLidPhonesBatch(sock, participants) {
+    if (typeof sock.onWhatsApp !== 'function') return;
+
+    const pendingDigits = [];
+    for (const p of participants) {
+        const rawId = p.id || p.jid || p.lid || '';
+        const digits = normalizeDigits(rawId);
+        if (!digits) continue;
+        if (rawId.endsWith('@s.whatsapp.net')) {
+            lidToPhone.set(digits, digits);
+            continue;
+        }
+        if (!lidToPhone.has(digits)) {
+            pendingDigits.push(digits);
+        }
+    }
+
+    const chunkSize = 15;
+    for (let i = 0; i < pendingDigits.length; i += chunkSize) {
+        const chunk = pendingDigits.slice(i, i + chunkSize);
+        const jidsToCheck = chunk.map((d) => `${d}@s.whatsapp.net`);
+        try {
+            const res = await sock.onWhatsApp(...jidsToCheck);
+            if (Array.isArray(res)) {
+                for (const item of res) {
+                    const checkedDigits = normalizeDigits(item?.query || item?.jid || '');
+                    const realDigits = item?.exists ? normalizeDigits(item?.jid || '') : '';
+                    if (checkedDigits && realDigits) {
+                        lidToPhone.set(checkedDigits, realDigits);
+                    }
+                }
+            }
+        } catch {}
+    }
+}
+
 async function handleGroupInfoCommand(sock, remoteJid, msg, body) {
     if (body.toLowerCase() !== '.hc') return false;
 
@@ -345,6 +402,8 @@ async function handleGroupInfoCommand(sock, remoteJid, msg, body) {
                 contactNames.set(p.id, pName);
             }
         }
+
+        await resolveLidPhonesBatch(sock, participants);
 
         const memberLines = participants.map((p, index) => {
             const memberJid = p.id || p.jid || p.lid || '';
