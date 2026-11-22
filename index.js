@@ -17,12 +17,12 @@ const SITE_URL = process.env.RAILWAY_STATIC_URL
     ? `https://${process.env.RAILWAY_STATIC_URL}`
     : 'https://58450067-production.up.railway.app';
 
+const BOT_NAME = 'KING SHAHID';
 const PAIR_TAG = 'SHAHID74';
 const publicFolder = path.join(__dirname, 'public');
 const indexFile = path.join(publicFolder, 'index.html');
 const sessionsRoot = path.join(__dirname, 'sessions');
 
-// نگهداری سوکت‌های فعال در حافظه تا پس از گرفتن کد بسته نشوند
 const activeSockets = new Map();
 
 app.use(express.json());
@@ -36,22 +36,22 @@ app.get('/', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-    res.json({ ok: true, site: SITE_URL, tag: PAIR_TAG });
+    res.json({ ok: true, site: SITE_URL, bot: BOT_NAME, tag: PAIR_TAG });
 });
 
 function buildMenuText() {
     return [
-        '╔══════════════════════╗',
-        '       📋 منوی ربات واتساپ',
-        '╚══════════════════════╝',
+        '╔════════════════════════╗',
+        `     👑 ${BOT_NAME} MENU`,
+        '╚════════════════════════╝',
         '',
-        'این ربات توسط KING SHAHID جور شده است.',
+        `این ربات توسط ${BOT_NAME} جور شده است.`,
         `شناسه: ${PAIR_TAG}`,
         '',
-        '📌 دستورات قابل استفاده:',
-        '• .MENU — نمایش این منو',
-        '• .PING — بررسی وضعیت اتصال ربات',
-        '• سلام — پیام خوش‌آمدگویی'
+        '📌 دستورات:',
+        '• .MENU — نمایش منو',
+        '• .PING — وضعیت ربات',
+        '• سلام — خوش‌آمدگویی'
     ].join('\n');
 }
 
@@ -60,22 +60,22 @@ function attachEvents(sock, number, sessionFolder) {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'open') {
-            console.log(`Connected successfully: ${number} (${PAIR_TAG})`);
+            console.log(`Connected: ${number} (${BOT_NAME})`);
             try {
                 await sock.sendMessage(sock.user.id, {
-                    text: `✅ ربات (${PAIR_TAG}) با موفقیت به واتساپ متصل شد!\nبرای دیدن منو دستور .MENU را بفرستید.\n\nاین ربات توسط KING SHAHID جور شده است.`
+                    text: `✅ متصل شد!\nاین ربات توسط ${BOT_NAME} جور شده است.\nبرای باز شدن منو .MENU بفرستید.`
                 });
             } catch (e) {
-                console.error('Welcome message error:', e.message);
+                console.error('Welcome send error:', e.message);
             }
         }
 
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`Connection closed for ${number}. Code: ${statusCode}, Reconnect: ${shouldReconnect}`);
+            const code = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = code !== DisconnectReason.loggedOut;
+            console.log(`Closed ${number} | code=${code} | reconnect=${shouldReconnect}`);
 
-            if (statusCode === DisconnectReason.loggedOut) {
+            if (code === DisconnectReason.loggedOut) {
                 activeSockets.delete(number);
                 fs.rmSync(sessionFolder, { recursive: true, force: true });
             } else if (shouldReconnect) {
@@ -101,11 +101,11 @@ function attachEvents(sock, number, sessionFolder) {
             await sock.sendMessage(msg.key.remoteJid, { text: buildMenuText() });
         } else if (body.toUpperCase() === '.PING') {
             await sock.sendMessage(msg.key.remoteJid, {
-                text: `🟢 ربات فعال است (${PAIR_TAG})!\nاین ربات توسط KING SHAHID جور شده است.`
+                text: `🟢 ربات فعال است!\nاین ربات توسط ${BOT_NAME} جور شده است.`
             });
         } else if (body === 'سلام') {
             await sock.sendMessage(msg.key.remoteJid, {
-                text: 'سلام! خوش آمدید. برای مشاهده منو .MENU را بفرستید.'
+                text: `سلام! این ربات توسط ${BOT_NAME} جور شده است. برای منو .MENU بزنید.`
             });
         }
     });
@@ -118,10 +118,10 @@ async function startSocket(number, { freshSession = false, isReconnect = false }
         fs.rmSync(sessionFolder, { recursive: true, force: true });
     }
 
-    const oldSock = activeSockets.get(number);
-    if (oldSock && !isReconnect) {
+    const prevSock = activeSockets.get(number);
+    if (prevSock && !isReconnect) {
         try {
-            oldSock.ws?.close();
+            prevSock.ws?.close();
         } catch {}
         activeSockets.delete(number);
     }
@@ -137,7 +137,7 @@ async function startSocket(number, { freshSession = false, isReconnect = false }
         },
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Mac OS', 'Chrome', '124.0.0.0'],
+        browser: ['Ubuntu', 'Chrome', '124.0.0.0'],
         markOnlineOnConnect: true,
         syncFullHistory: false
     });
@@ -153,7 +153,7 @@ app.post('/pair', async (req, res) => {
     let { number } = req.body;
 
     if (!number) {
-        return res.status(400).json({ error: 'لطفاً شماره را وارد کنید.' });
+        return res.status(400).json({ error: 'لطفاً شماره واتساپ را وارد کنید.' });
     }
 
     number = number.replace(/[^0-9]/g, '');
@@ -162,31 +162,28 @@ app.post('/pair', async (req, res) => {
     }
 
     try {
-        // شروع نشست تازه برای جلوگیری از گیر کردن روی نشست نیمه‌کاره قبلی
         const sock = await startSocket(number, { freshSession: true });
 
         if (!sock.authState.creds.registered) {
             await delay(2000);
             const rawCode = await sock.requestPairingCode(number);
             const formatted = rawCode?.match(/.{1,4}/g)?.join('-') || rawCode;
-            return res.json({
-                code: formatted,
-                tag: PAIR_TAG
-            });
+            return res.json({ code: formatted, tag: PAIR_TAG, bot: BOT_NAME });
         }
 
         return res.json({
-            message: 'این شماره قبلاً متصل است. در واتساپ .MENU را بفرستید.',
-            tag: PAIR_TAG
+            message: `این شماره متصل است. در واتساپ .MENU بفرستید.`,
+            tag: PAIR_TAG,
+            bot: BOT_NAME
         });
     } catch (err) {
         console.error('Pair error:', err);
         return res.status(500).json({
-            error: 'خطا در تولید کد یا برقراری ارتباط با واتساپ. چند دقیقه صبر کنید و دوباره امتحان کنید.'
+            error: 'واتساپ موقتاً درخواست را محدود کرد یا ارتباط قطع شد. چند دقیقه صبر کنید و دوباره امتحان کنید.'
         });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`Running on ${SITE_URL} (port ${PORT})`);
+    console.log(`${BOT_NAME} server running on ${SITE_URL} (port ${PORT})`);
 });
