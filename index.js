@@ -20,6 +20,7 @@ const SITE_URL = process.env.RAILWAY_STATIC_URL
 
 const BOT_NAME = 'KING SHAHID';
 const PAIR_TAG = 'SHAHID74';
+
 const publicFolder = path.join(__dirname, 'public');
 const indexFile = path.join(publicFolder, 'index.html');
 const sessionsRoot = path.join(__dirname, 'sessions');
@@ -61,6 +62,7 @@ const DEFAULT_REPLIES = {
         '• .Shahid <متن> — انتخاب متن برای یادگیری جواب',
         '• .vv — باز کردن قفل عکس/ویدیوی ریپلای‌شده',
         '• .git — نمایش عکس پروفایل، نام و شماره کاربر',
+        '• .hc — نمایش نام، پروفایل، تعداد و لیست نام و شماره اعضای گروه',
         '• .menu — نمایش منو'
     ].join('\n')
 };
@@ -319,6 +321,78 @@ async function handleUserProfileCommand(sock, remoteJid, msg, body) {
     return true;
 }
 
+async function handleGroupInfoCommand(sock, remoteJid, msg, body) {
+    if (body.toLowerCase() !== '.hc') return false;
+
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(
+            remoteJid,
+            { text: `⚠️ دستور .hc فقط در گروه‌ها کار می‌کند.\n${BOT_NAME}` },
+            { quoted: msg }
+        );
+        return true;
+    }
+
+    try {
+        const metadata = await sock.groupMetadata(remoteJid);
+        const groupName = metadata?.subject || 'بدون نام';
+        const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+
+        for (const p of participants) {
+            registerContactMapping(p);
+            const pName = p.notify || p.name || p.verifiedName;
+            if (p.id && pName && !contactNames.has(p.id)) {
+                contactNames.set(p.id, pName);
+            }
+        }
+
+        const memberLines = participants.map((p, index) => {
+            const memberJid = p.id || p.jid || p.lid || '';
+            const phone = extractPhoneFromJid(memberJid);
+            const name = resolveDisplayName(memberJid, p.notify || p.name || '');
+            return `${index + 1}. 👤 ${name} | 📞 ${phone}`;
+        });
+
+        const headerText = [
+            `🏷️ نام گروه: ${groupName}`,
+            `👥 تعداد کاربران گروه: ${participants.length}`,
+            '',
+            '📋 لیست کاربران:',
+            ...(memberLines.length ? memberLines : ['کاربری یافت نشد.']),
+            '',
+            `مشخصات گروه دریافت شد توسط ${BOT_NAME}`
+        ].join('\n');
+
+        let ppUrl = null;
+        try {
+            ppUrl = await sock.profilePictureUrl(remoteJid, 'image');
+        } catch {}
+
+        if (ppUrl) {
+            await sock.sendMessage(
+                remoteJid,
+                { image: { url: ppUrl }, caption: headerText },
+                { quoted: msg }
+            );
+        } else {
+            await sock.sendMessage(
+                remoteJid,
+                { text: `${headerText}\n🖼️ عکس پروفایل گروه در دسترس نیست.` },
+                { quoted: msg }
+            );
+        }
+    } catch (err) {
+        console.error('Group .hc error:', err.message);
+        await sock.sendMessage(
+            remoteJid,
+            { text: `❌ دریافت اطلاعات گروه ناموفق بود.\n${BOT_NAME}` },
+            { quoted: msg }
+        );
+    }
+
+    return true;
+}
+
 function extractTextFromMessage(rawMessage) {
     const message = unwrapMessage(rawMessage);
     if (!message) return '';
@@ -540,7 +614,6 @@ function attachEvents(sock, number, sessionFolder) {
             const lowerCmd = body ? body.toLowerCase() : '';
             const isGroup = remoteJid.endsWith('@g.us');
 
-            // جلوگیری از لوپ روی پیام‌های خود ربات
             const isBotEcho =
                 msg.key.fromMe &&
                 (body.startsWith('✅') ||
@@ -549,13 +622,13 @@ function attachEvents(sock, number, sessionFolder) {
                     body.startsWith('برای این چی') ||
                     body.startsWith('✅ ذخیره شد') ||
                     body.startsWith('👤 نام:') ||
+                    body.startsWith('🏷️ نام گروه:') ||
                     body.startsWith('⚠️') ||
                     body.startsWith('❌') ||
                     body.endsWith(`\n${BOT_NAME}`) ||
                     body === BOT_NAME);
             if (isBotEcho) continue;
 
-            // اجرای فوری .vv و .git هم در گروه و هم در چت خصوصی
             if (lowerCmd === '.vv') {
                 handleUnlockViewOnce(sock, remoteJid, msg, body).catch((err) => {
                     console.error('Fast .vv error:', err.message);
@@ -570,9 +643,15 @@ function attachEvents(sock, number, sessionFolder) {
                 continue;
             }
 
+            if (lowerCmd === '.hc') {
+                handleGroupInfoCommand(sock, remoteJid, msg, body).catch((err) => {
+                    console.error('Fast .hc error:', err.message);
+                });
+                continue;
+            }
+
             if (isGroup) continue;
 
-            // اگر خودتان در چت خصوصی پیام دادید، فقط دستورات آموزشی را بررسی کن
             if (msg.key.fromMe) {
                 const isOwnerCmd =
                     lowerCmd === '.shahid' ||
